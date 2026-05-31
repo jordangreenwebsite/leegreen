@@ -108,13 +108,15 @@ function initFuseSearch() {
 
         // Build search index for Fuse.
         for (const value of index) {
-            var result = {
+            // Preserve custom fields added via ssp_search_index_item so weighted
+            // Fuse keys from ssp_fuse_search_weights can search against them.
+            var result = Object.assign({}, value, {
                 url: window.location.origin + value.path,
                 title: value.title,
                 excerpt: value.excerpt,
                 content: value.content,
                 language: value.language
-            };
+            });
 
             if (is_multilingual) {
                 // Include entry if:
@@ -143,20 +145,53 @@ function initFuseSearch() {
 
 // Search.
 
-    let keys = ['title', 'content', 'excerpt', 'language'];
     let fuse = null;
+
+    // Default max results; updated once config loads
+    let maxResults = 7;
 
     loadConfig(function (response) {
         config = JSON.parse(response);
 
+        // Read configurable max results (fallback to 7)
+        if (config.maxResults && parseInt(config.maxResults, 10) > 0) {
+            maxResults = parseInt(config.maxResults, 10);
+        }
+
+        // Build weighted keys dynamically from config (supports custom fields added via ssp_fuse_search_weights filter)
+        var weights = config.weights || {};
+        var keys = [];
+        for (var field in weights) {
+            if (weights.hasOwnProperty(field)) {
+                keys.push({ name: field, weight: parseFloat(weights[field]) || 1 });
+            }
+        }
+        // Ensure default keys exist if not provided
+        if (!weights.title) keys.push({ name: 'title', weight: 1 });
+        if (!weights.content) keys.push({ name: 'content', weight: 1 });
+        if (!weights.excerpt) keys.push({ name: 'excerpt', weight: 1 });
+        keys.push({ name: 'language', weight: 1 });
+
+        var fuseOptions = {
+            keys: keys,
+            shouldSort: true,
+            threshold: config.threshold ? config.threshold : 0.1,
+            maxPatternLength: 50
+        };
+
+        // Add extended search if enabled
+        if (config.useExtendedSearch) {
+            fuseOptions.useExtendedSearch = true;
+        }
+
+        // Add ignore location if enabled
+        if (config.ignoreLocation) {
+            fuseOptions.ignoreLocation = true;
+        }
+
         fuse = new Fuse(
             searchResults,
-            {
-                keys: keys,
-                shouldSort: true,
-                threshold: config.threshold ? config.threshold : 0.1,
-                maxPatternLength: 50
-            }
+            fuseOptions
         );
 
         configLoaded = true;
@@ -226,7 +261,7 @@ function initFuseSearch() {
 
             // Always compute results on submit so the results list can render
             if (input.length >= 3 && fuse) {
-                results = fuse.search(input).slice(0, 7)
+                results = fuse.search(input).slice(0, maxResults)
             }
 
             // Ensure autocomplete dropdown is (re)shown on submit
@@ -291,7 +326,7 @@ function initFuseSearch() {
 
             if (input.length >= 3) {
                 if (fuse) {
-                    results = fuse.search(input).slice(0, 7)
+                    results = fuse.search(input).slice(0, maxResults)
                 } else {
                     // Fuse not ready yet; wait for it to load
                     results = []
